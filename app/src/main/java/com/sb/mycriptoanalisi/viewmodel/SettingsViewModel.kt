@@ -1,6 +1,10 @@
 package com.sb.mycriptoanalisi.viewmodel
 
+import android.app.Activity
 import android.app.Application
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
@@ -13,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.security.MessageDigest
+import javax.crypto.SecretKey
 import javax.crypto.spec.SecretKeySpec
 
 class SettingsViewModel(
@@ -22,6 +27,30 @@ class SettingsViewModel(
 
     private val sharedPrefs =
         application.getSharedPreferences("settings_prefs", Application.MODE_PRIVATE)
+    // Nel tuo ViewModel o Activity
+    private var backupUri: Uri? = null
+
+    fun selectBackupFolder(context: Context) {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+        intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        (context as Activity).startActivityForResult(intent, REQUEST_CODE_BACKUP_FOLDER)
+    }
+
+    // Gestisci il risultato della selezione
+    fun onBackupFolderSelected(uri: Uri, context: Context) {
+        try {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            backupUri = uri
+            println("DEBUG: Backup folder selected: $uri")
+        } catch (e: Exception) {
+            println("DEBUG: Error taking permission: ${e.message}")
+        }
+    }
+
 
     // ------------------ FONT SIZE ------------------
     private val _fontSize = MutableStateFlow(sharedPrefs.getFloat("FONT_SIZE", 14f))
@@ -40,8 +69,12 @@ class SettingsViewModel(
     }
 
     // ------------------ Aes Key ------------------
-    fun deriveAESKey(iniziali: String, password: String, salt: String = "MyCriptoSalt"): SecretKeySpec {
-        val combined = (iniziali + password + salt).toByteArray(Charsets.UTF_8)
+    fun deriveAESKey(iniziali: String, password: String): SecretKey {
+        println("DEBUG: Deriving key from initials: '$iniziali'")
+        println("DEBUG: Password length: ${password.length}")
+
+            val salt = "MyCryptoFixedSalt2024" // FISSO
+            val combined = (iniziali + password + salt).toByteArray(Charsets.UTF_8)
         val hash = MessageDigest.getInstance("SHA-256").digest(combined)
         return SecretKeySpec(hash.copyOf(16), "AES") // AES-128
     }
@@ -134,9 +167,22 @@ class SettingsViewModel(
             return false
         }
 
-        println("DEBUG: Password effettiva usata: $passwordEffettiva")
+        println("DEBUG: Ripristino - Iniziali: '$iniziali'")
+        println("DEBUG: Ripristino - Password: '$passwordEffettiva'")
+
         val chiaveAES = deriveAESKey(iniziali, passwordEffettiva)
-        val lista = backupRepo.loadPortafoglio(chiaveAES)
+        println("DEBUG: Chiave AES derivata: ${chiaveAES.encoded?.size} bytes")
+
+        // AGGIUNGI TRY-CATCH PER ERRORI DI DECIFRAZIONE
+        val lista = try {
+            backupRepo.loadPortafoglio(chiaveAES)
+        } catch (e: Exception) {
+            println("DEBUG: Errore durante decifratura: ${e.message}")
+            e.printStackTrace()
+            emptyList()
+        }
+
+        println("DEBUG: Lista ripristinata: ${lista.size} elementi")
 
         return if (lista.isNotEmpty()) {
             lista.forEach { repository.insert(it) }

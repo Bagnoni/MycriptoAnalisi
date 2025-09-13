@@ -2,10 +2,12 @@ package com.sb.mycriptoanalisi.data
 
 import android.app.Application
 import android.os.Environment
+import androidx.room.processor.Context
 import com.google.gson.Gson
 import java.io.File
 import javax.crypto.Cipher
 import javax.crypto.SecretKey
+import javax.crypto.spec.IvParameterSpec
 
 data class BackupWrapper(
     val check: String = "VALID_BACKUP",
@@ -31,71 +33,108 @@ class PortafoglioRepositoryLocale(application: Application) {
         return SecretKeySpec(key.copyOf(16), "AES")
     }*/
 
-    private fun encrypt(data: String, key: SecretKey): ByteArray {
-        val cipher = Cipher.getInstance("AES")
+    private fun encryptWithIV(data: String, key: SecretKey): ByteArray {
+        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding") // ← SPECIFICA MODALITÀ!
         cipher.init(Cipher.ENCRYPT_MODE, key)
-        return cipher.doFinal(data.toByteArray(Charsets.UTF_8))
+
+        // SALVA L'IV INSIEME AI DATI!
+        val iv = cipher.iv
+        val encrypted = cipher.doFinal(data.toByteArray(Charsets.UTF_8))
+
+        return iv + encrypted // IV (16 bytes) + dati cifrati
     }
 
-    private fun decrypt(data: ByteArray, key: SecretKey): String {
-        val cipher = Cipher.getInstance("AES")
-        cipher.init(Cipher.DECRYPT_MODE, key)
-        return String(cipher.doFinal(data), Charsets.UTF_8)
+    private fun decryptWithIV(data: ByteArray, key: SecretKey): String {
+        // ESTRAI IV (primi 16 bytes)
+        val iv = data.copyOfRange(0, 16)
+        val actualData = data.copyOfRange(16, data.size)
+
+        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding") // ← STESSA MODALITÀ!
+        cipher.init(Cipher.DECRYPT_MODE, key, IvParameterSpec(iv))
+
+        return String(cipher.doFinal(actualData), Charsets.UTF_8)
     }
 
-    // 💾 Salvataggio persistente
-    fun savePortafoglio(lista: List<CriptoPosseduta>, key: SecretKey) {
+    // 💾 Salvataggio con SAF
+    fun savePortafoglio(lista: List<CriptoPosseduta>, key: SecretKey, context: Context) {
+        if (backupUri == null) {
+            println("DEBUG: Nessuna cartella di backup selezionata")
+            return
+        }
+
         try {
-            if (!backupDir.exists()) backupDir.mkdirs()
-
             val wrapper = BackupWrapper(portafoglio = lista)
             val json = gson.toJson(wrapper)
-            val encrypted = encrypt(json, key)
+            val encrypted = encryptWithIV(json, key)
 
-            if (backupFile.exists()) {
-                val deleted = backupFile.delete()
-                println("DEBUG: Vecchio backup eliminato: $deleted")
-                if (!deleted) {
-                    println("DEBUG: Impossibile eliminare il file. Permessi mancanti?")
-                    return
+            // Crea il file nella cartella selezionata
+            val backupFileUri = DocumentsContract.createDocument(
+                context.contentResolver,
+                backupUri!!,
+                "application/json",
+                "backup_portafoglio_${System.currentTimeMillis()}.enc"
+            )
+
+            backupFileUri?.let { uri ->
+                context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                    outputStream.write(encrypted)
+                    println("DEBUG: Backup salvato con SAF: $uri")
                 }
             }
-
-
-            backupFile.writeBytes(encrypted)
-
-            println("DEBUG: Backup salvato in ${backupFile.absolutePath}")
         } catch (e: Exception) {
+            println("DEBUG: Errore salvataggio SAF: ${e.message}")
             e.printStackTrace()
-            println("DEBUG: Errore nel salvataggio: ${e.message}")
         }
     }
 
-    // 📂 Ripristino compatibile
-    fun loadPortafoglio(key: SecretKey): List<CriptoPosseduta> {
-        if (!backupFile.exists()) return emptyList()
-        return try {
-            val encrypted = backupFile.readBytes()
-            val json = decrypt(encrypted, key)
-            val wrapper = gson.fromJson(json, BackupWrapper::class.java)
+    // 📂 Ripristino con SAF
+    fun loadPortafoglio(key: SecretKey, context: Context): List<CriptoPosseduta> {
+        if (backupUri == null) {
+            println("DEBUG: Nessuna cartella di backup selezionata")
+            return emptyList()
+        }
 
-            if (wrapper.check == "VALID_BACKUP") wrapper.portafoglio
-            else {
-                println("DEBUG: Backup non valido")
-                emptyList()
-            }
+        return try {
+            // Cerca il file di backup più recente
+            val backupFiles = findBackupFiles(context)
+            val latestBackup = backupFiles.maxByOrNull { it.second } // (uri, timestamp)
+
+            latestBackup?.first?.let { uri ->
+                context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                    val encrypted = inputStream.readBytes()
+                    val json = decryptWithIV(encrypted, key)
+                    val wrapper = gson.fromJson(json, BackupWrapper::class.java)
+
+                    if (wrapper.check == "VALID_BACKUP") wrapper.portafoglio else emptyList()
+                }
+            } ?: emptyList()
         } catch (e: Exception) {
-            e.printStackTrace()
-            println("DEBUG: Errore nel ripristino: ${e.message}")
+            println("DEBUG: Errore ripristino SAF: ${e.message}")
             emptyList()
         }
     }
 
+    // 🗑️ Cancellazione con fallback
     fun cancellaBackup(): Boolean {
-        return backupFile.exists() && backupFile.delete()
+        println("DEBUG: Tentativo cancellazione backup: ${backupFile.absolutePath}")
+        println("DEBUG: File exists: ${backupFile.exists()}")
+        println("DEBUG: File canWrite: ${backupFile.canWrite()}")
+
+        return if (backupFile.exists()) {
+            val deleted = backupFile.delete()
+            println("DEBUG: Delete risultato: $deleted")
+
+            if (!deleted) {
+                // Fallback: rinomina invece di cancellare
+                val oldFile = File(backupFile.parent, "deleted_backup_${System.currentTimeMillis()}.enc")
+                val renamed = backupFile.renameTo(oldFile)
+                println("DEBUG: Rename risultato: $renamed -> ${oldFile.absolutePath}")
+                renamed
+            } else {
+                true
+            }
+        } else {
+            true // File non esiste = successo
+        }
     }
-
-    /*fun backupEsiste(): Boolean = backupFile.exists()
-
-    fun getBackupPath(): String = backupFile.absolutePath*/
 }

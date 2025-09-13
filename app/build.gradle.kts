@@ -61,6 +61,7 @@ dependencies {
     implementation(libs.runtime.livedata)
     implementation(libs.foundation)
     implementation(libs.runtime)
+    implementation(libs.androidx.room.compiler)
     ksp(libs.room.compiler)
 
     // Hilt

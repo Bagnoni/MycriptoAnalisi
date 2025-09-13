@@ -33,6 +33,7 @@ ui-text = "1.9.0"
 runtime-livedata = "1.9.0"
 foundation = "1.9.0"
 runtime = "1.9.0"
+room-compiler = "2.8.0"
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
@@ -82,3 +83,4 @@ ui-text = { group = "androidx.compose.ui", name = "ui-text", version.ref = "ui-t
 runtime-livedata = { group = "androidx.compose.runtime", name = "runtime-livedata", version.ref = "runtime-livedata" }
 foundation = { group = "androidx.compose.foundation", name = "foundation", version.ref = "foundation" }
 runtime = { group = "androidx.compose.runtime", name = "runtime", version.ref = "runtime" }
+androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room-compiler" }
